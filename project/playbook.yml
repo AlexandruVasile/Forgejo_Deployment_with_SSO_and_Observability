@@ -1,0 +1,20 @@
+---
+- name: Docker and init swarm
+  hosts: targets
+  vars:
+    control_storage_address: "10.255.255.10"
+    target1_storage_address: "10.255.255.11"
+    target2_storage_address: "10.255.255.12"
+    author: "Alexandru Vasile"
+    company: "vcc"
+    license: "MIT"
+
+  roles:
+    - docker
+    - swarm
+    - nfs
+    - registry
+- name: Docker Swarm services
+  hosts: targets[0]
+  roles:
+    - swarm-services

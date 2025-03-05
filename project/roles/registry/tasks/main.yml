@@ -1,0 +1,187 @@
+---
+# tasks file for roles/registry
+- name: Install apache2-utils for htpasswd
+  # TODO
+  ansible.builtin.apt:
+    pkg:
+      - apache2-utils
+    state: present
+    update_cache: true
+  become: true
+
+
+- name: create entry in '/etc/hosts' for registry
+  lineinfile:
+    path: /etc/hosts
+    state: present
+    line: "127.0.0.1 {{ registry_name }}"
+  become: true
+
+
+- name: Create the shared /data/registry directory
+  # TODO
+  ansible.builtin.file:
+    path: /data/registry
+    state: directory
+  become: true
+  when: inventory_hostname in groups['nfs_server']
+
+
+- name: Create the shared /data/registry/cert directory
+  # TODO
+  ansible.builtin.file:
+    path: /data/registry/cert
+    state: directory
+  become: true
+  when: inventory_hostname in groups['nfs_server']
+
+
+- name: Create private key (RSA, 4096 bits)
+  # TODO
+  community.crypto.openssl_privatekey:
+    path: /data/registry/cert/registry.key
+  when: inventory_hostname in groups['nfs_server']
+  become: true
+
+
+- name: Create self-signed certificate
+  # TODO
+  community.crypto.x509_certificate:
+    path: /data/registry/cert/registry.pem
+    privatekey_path: /data/registry/cert/registry.key
+    provider: selfsigned
+  when: inventory_hostname in groups['nfs_server']
+  become: true
+
+
+- name: install passlib dependency of htpasswd ansible module
+  ansible.builtin.apt:
+    pkg:
+      - python3-passlib
+  become: true
+
+
+- name: Create registry htpasswd
+  # TODO
+  community.general.htpasswd:
+    path: "/data/registry/htpasswd"
+    name: "{{ registry_username }}"
+    password: "{{ registry_password }}"
+    crypt_scheme: "bcrypt"
+  when: inventory_hostname in groups['nfs_server']
+  become: true
+
+
+- name: Config for registry proxy cache
+  set_fact:
+    proxy_config: "{{ config | to_nice_yaml }}"
+  vars:
+    config:
+      version: 0.1
+      log:
+        fields:
+          service: registry
+      storage:
+        cache:
+          blobdescriptor: inmemory
+        filesystem:
+          rootdirectory: /var/lib/registry
+      http:
+        addr: 127.0.0.1:5001
+        headers:
+          X-Content-Type-Options: [nosniff]
+      health:
+        storagedriver:
+          enabled: true
+          interval: 10s
+          threshold: 3
+      delete:
+        enabled: true
+      proxy:
+        remoteurl: https://registry-1.docker.io
+
+
+- name: Copy using inline content
+  ansible.builtin.copy:
+    content: "{{ proxy_config }}"
+    dest: /data/registry/config.yml
+  become: true
+  when: inventory_hostname in groups['nfs_server']
+
+
+- name: Config for registry proxy in docker daemon
+  set_fact:
+    docker_daemon: "{{ config | to_nice_json }}"
+  vars:
+    config:
+      registry-mirrors:
+        - http://127.0.0.1:5001
+      insecure-registries:
+        - 127.0.0.1:5001
+
+
+- name: Copy using inline content
+  ansible.builtin.copy:
+    content: "{{ docker_daemon }}"
+    dest: /etc/docker/daemon.json
+  become: true
+
+- name: Restart dockerd
+  ansible.builtin.service:
+    name: docker
+    state: restarted
+  become: true
+
+- name: Run registry for cache
+  docker_swarm_service:
+    name: registry-cache
+    image: registry:2.8.3
+    mode: global
+    mounts:
+      - source: /data/registry
+        target: /var/lib/registry
+        type: bind
+      - source: /data/registry/config.yml
+        target: /etc/docker/registry/config.yml
+        type: bind
+    networks:
+      - host
+  when: inventory_hostname in groups['swarm_manager']
+
+- name: Run registry
+  docker_swarm_service:
+    name: registry
+    image: registry:2.8.3
+    mode: global
+    mounts:
+      - source: /data/registry
+        target: /var/lib/registry
+        type: bind
+      - source: /data/registry/cert
+        target: /cert
+        type: bind
+      - source: /data/registry/htpasswd
+        target: /htpasswd
+        type: bind
+    networks:
+      - host
+    env:
+      REGISTRY_AUTH: "htpasswd"
+      REGISTRY_AUTH_HTPASSWD_REALM: "RegistryRealm"
+      REGISTRY_AUTH_HTPASSWD_PATH: "/htpasswd"
+      # enable tls
+      REGISTRY_HTTP_TLS_CERTIFICATE: "/cert/registry.pem"
+      REGISTRY_HTTP_TLS_KEY: "/cert/registry.key"
+  when: inventory_hostname in groups['swarm_manager']
+
+- name: Wait for port 5000
+  ansible.builtin.wait_for:
+    port: 5000
+    delay: 5
+
+
+- name: Log into private registry
+  docker_login:
+    registry_url: "{{ registry_name }}:{{ registry_port }}"
+    username: "{{ registry_username }}"
+    password: "{{ registry_password }}"

@@ -1,0 +1,76 @@
+---
+# tasks file for roles/nfs
+
+
+- name: Install server package
+  # TODO
+  ansible.builtin.apt:
+    pkg:
+      - nfs-kernel-server
+    state: present
+    update_cache: true
+  when: inventory_hostname in groups['nfs_server']
+  become: true
+
+- name: Install client package
+  # TODO
+  ansible.builtin.apt:
+    pkg:
+      - nfs-common
+    update_cache: true
+    state: present
+  when: inventory_hostname in groups['nfs_client']
+  become: true
+
+- name: enable nfs server
+  # TODO
+  ansible.builtin.service:
+    name: nfs-server
+    state: started
+  when: inventory_hostname in groups['nfs_server']
+  become: true
+
+- name: Create the shared /data directory
+  # TODO
+  ansible.builtin.file:
+    path: /data
+    state: directory
+    mode: '0777'
+  become: true
+
+- name: Export /data directory in nfs server
+  # TODO
+  lineinfile:
+    path: /etc/exports # configuration file of nfs server
+    state: present
+    line: "/data {{ target2_storage_address }}(rw,no_root_squash,no_subtree_check)"
+  when: inventory_hostname in groups['nfs_server']
+  become: true
+
+# client mounts /data at reboot
+- name: Update fstab to mount /data in nfs client
+  lineinfile:
+    path: /etc/fstab
+    state: present
+    line: "{{ target1_storage_address }}:/data /data nfs defaults 0 0"
+  when: inventory_hostname in groups['nfs_client']
+  become: true
+
+- name: restart nfs server/reload exportfs
+  # TODO
+  ansible.builtin.service:
+    name: nfs-server
+    state: restarted
+  when: inventory_hostname in groups['nfs_server']
+  become: true
+
+
+# client mounts /data without reboot
+- name: mount /data on nfs client
+  ansible.posix.mount:
+    path: /data
+    state: mounted
+    fstype: nfs
+    src: "{{ target1_storage_address }}:/data"
+  when: inventory_hostname in groups['nfs_client']
+  become: true

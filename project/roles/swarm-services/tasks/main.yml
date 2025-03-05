@@ -1,0 +1,78 @@
+---
+# tasks file for roles/swarm-services
+- name: Install python3-jsondiff
+  ansible.builtin.apt:
+    name: python3-jsondiff
+  become: true
+
+- import_tasks: cleanup.yml
+  when: swarm_force_reset_all_services
+
+- name: Create data directories
+  ansible.builtin.file:
+    path: "/data/services/{{ item['name'] }}"
+    state: directory
+  loop: "{{ swarm_services_data_dirs }}"
+  become: true
+
+- name: Create directories
+  ansible.builtin.file:
+    path: "/data/configs/{{ item.path }}"
+    state: directory
+  with_community.general.filetree: "{{ role_path }}/templates/configs"
+  when: item.state == 'directory'
+
+- name: Template files
+  ansible.builtin.template:
+    src: "{{ item.src }}"
+    dest: "/data/configs/{{ item.path }}"
+  with_community.general.filetree: "{{ role_path }}/templates/configs"
+  when:
+    - item.state == 'file'
+    - item.path | basename != '.gitkeep'
+
+- name: Build container images
+  community.docker.docker_image:
+    source: build
+    force_source: true
+    force_tag: true
+    build:
+      dockerfile: "/data/configs/images/{{ item.path | dirname }}/{{ item.path | basename }}"
+      path: "/data/configs/images/{{ item.path | dirname }}"
+      pull: true
+    push: true
+    repository: "registry.vcc.local:5000/vcc-{{ item.path | dirname }}"
+    name: "vcc-{{ item.path | dirname }}"
+    tag: latest
+  with_community.general.filetree: "{{ role_path }}/templates/configs/images"
+  when:
+    - item.state == 'file'
+    - item.path | basename in [ 'Containerfile', 'Dockerfile' ]
+
+- include_role:
+    name: refresh-local-images
+    apply:
+      delegate_to: "{{ host }}"
+  loop: "{{ groups['targets'] }}"
+  loop_control:
+    loop_var: host
+
+- name: Template docker-compose.yml
+  ansible.builtin.template:
+    src: docker-compose.yml
+    dest: /data/docker-compose.yml
+  register: docker_compose
+
+- name: Template realm-export.json
+  ansible.builtin.template:
+    src: configs/keycloak/realm-export.json
+    dest: /data/configs/keycloak
+
+
+- name: Deploy docker stack
+  community.docker.docker_stack:
+    name: vcc
+    compose:
+      - /data/docker-compose.yml
+    prune: true
+    with_registry_auth: true

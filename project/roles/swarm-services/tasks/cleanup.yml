@@ -1,0 +1,22 @@
+---
+- name: '[CLEANUP] delete docker stack'
+  community.docker.docker_stack:
+    name: vcc
+    compose:
+      - /data/docker-compose.yml
+    absent_retries: 10
+    state: absent
+  # for some reason this action requires 2+ attempts to delete the services
+  retries: 5
+  delay: 1
+  register: result
+  until: result is success
+
+- name: '[CLEANUP] delete data directories'
+  ansible.builtin.file:
+    path: '{{ item }}'
+    state: absent
+  loop:
+    - /data/configs
+    - /data/services
+  become: true

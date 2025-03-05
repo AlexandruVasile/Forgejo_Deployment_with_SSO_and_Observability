@@ -1,0 +1,41 @@
+---
+# tasks file for roles/docker
+
+- name: add Docker apt repository key.
+  ansible.builtin.get_url:
+    url: https://download.docker.com/linux/ubuntu/gpg
+    dest: /etc/apt/trusted.gpg.d/docker.asc
+    mode: '0644'
+    force: true # to have an up to date file at each run of ansible playbook
+  become: true
+
+- name: add Docker source
+  ansible.builtin.apt_repository:
+    repo: >
+      deb [arch={{ get_arch }}, signed-by=/etc/apt/trusted.gpg.d/docker.asc]
+      https://download.docker.com/linux/ubuntu
+      {{ ansible_distribution_release }} stable
+    state: present
+  become: true
+
+- name: Install Docker and docker compose plugin
+  ansible.builtin.apt:
+    pkg:
+      - docker-ce
+      - docker-ce-cli
+      - containerd.io
+      - docker-compose-plugin
+    update_cache: true
+  become: true
+
+# to use docker without root permissions
+- name: add vagrant user to group docker
+  ansible.builtin.user:
+    name: vagrant
+    groups: docker
+    append: true
+  become: true
+
+#  make the changes take effect immediately
+- name: Reset ssh connection
+  ansible.builtin.meta: reset_connection

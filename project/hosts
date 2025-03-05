@@ -1,0 +1,20 @@
+# hosts file
+controlnode.vcc.local ansible_connection=local
+
+[targets]
+target[1:2].vcc.local
+
+[swarm_manager]
+target1.vcc.local
+
+[swarm_worker]
+target2.vcc.local
+
+[nfs_server]
+target1.vcc.local
+
+[nfs_client]
+target2.vcc.local
+
+[all:vars]
+ansible_user=vagrant

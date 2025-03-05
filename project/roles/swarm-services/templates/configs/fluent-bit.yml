@@ -1,0 +1,27 @@
+---
+service:
+  flush: 1
+  log_level: info
+  parsers_file: /etc/fluent-bit/fluent-bit.conf
+
+pipeline:
+  inputs:
+    #
+    # Metrics
+    #
+    - name: fluentbit_metrics
+      scrape_interval: 10
+      scrape_on_start: true
+      tag: metrics.fluentbit
+
+    - name: node_exporter_metrics
+      scrape_interval: 10
+      path.procfs: /host/proc
+      path.sysfs: /host/sys
+      metrics: 'cpu,diskstats,loadavg,meminfo,netdev,stat,time,uname,vmstat,systemd,filesystem'
+      tag: metrics.node_exporter
+
+  outputs:
+
+    - name: prometheus_exporter
+      match: 'metrics.*'

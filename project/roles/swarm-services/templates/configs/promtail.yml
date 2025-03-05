@@ -1,0 +1,35 @@
+clients: # how Promtail connects to instances of Loki
+  - url: http://loki:3100/loki/api/v1/push
+    batchwait: 1s
+
+server:
+  http_listen_port: 3000
+  register_instrumentation: true
+
+positions: # keep tracks of where we are in the reading of the logs
+  filename: /var/log/positions.yaml
+
+scrape_configs:
+  - job_name: docker
+    pipeline_stages:
+      - static_labels: 
+          node_hostname: ${NODE_HOSTNAME} # env var defined externally, passed via -config.expand-env=true
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 10s
+    relabel_configs:
+      - source_labels: ['__meta_docker_container_name']
+        regex: '/(.*)' # match any docker container name that starts with /
+        target_label: container_name
+      - regex: __meta_docker_container_log_stream
+        action: labelmap
+        replacement: stream
+      # # TODO extract labels containing the service name
+      # # tip: https://grafana.com/docs/loki/latest/send-data/promtail/configuration/#docker_sd_config
+      - source_labels: ['__meta_docker_container_name']
+        regex: '/(.*)\.[0-9]\..*'
+        target_label: 'service_name'
+      - source_labels: ['__meta_docker_container_name']
+        regex: '/(.*)\.[0-9a-z]*\..*'
+        target_label: 'service_name'
+

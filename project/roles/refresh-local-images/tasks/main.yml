@@ -1,0 +1,12 @@
+---
+- name: List all images
+  community.docker.docker_image_info:
+  register: images
+
+- name: Pull again local images
+  community.docker.docker_image:
+    name: "{{ item }}"
+    source: pull
+    force_source: true
+  loop: "{{ images.images | map(attribute='RepoTags') | flatten }}"
+  when: item is match('registry.vcc.local*')

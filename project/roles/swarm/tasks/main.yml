@@ -1,0 +1,28 @@
+---
+# tasks file for roles/swarm
+
+- name: install Docker SDK for python
+  ansible.builtin.apt:
+    pkg:
+      - python3-docker
+  become: true
+
+- name: check/init swarm
+  docker_swarm:
+    state: present
+    advertise_addr: eth1
+  register: swarm
+  when: inventory_hostname in groups['swarm_manager']
+  become: true
+
+
+- name: join worker
+  # TODO
+  docker_swarm:
+    state: join
+    advertise_addr: eth1 # net of the swarm
+    # get the join token from the manager
+    join_token: "{{ hostvars[groups['swarm_manager'][0]]['swarm']['swarm_facts']['JoinTokens']['Worker'] }}"
+    remote_addrs: "{{ groups['swarm_manager'][0] }}"
+  when: inventory_hostname in groups['swarm_worker']
+  become: true

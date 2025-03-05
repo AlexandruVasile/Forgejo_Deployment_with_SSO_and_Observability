@@ -1,0 +1,288 @@
+---
+version: '3.8'
+services:
+  #
+  # Traefik cert init
+  #
+  traefik_cert_init:
+    image: registry.vcc.local:5000/vcc-traefik_cert_init
+    environment: 
+      SSL_CN: "*.vcc.local"
+      SSL_O: "VCC"
+      SSL_C: "IT"
+      SSL_DAYS: 3650
+    volumes:
+      - /data/services/traefik-certs:/etc/ssl/traefik
+      - /data/services/traefik:/etc/traefik/dynamic
+    deploy:
+      restart_policy:
+        condition: none
+      mode: replicated
+      replicas: 1
+
+
+  #
+  # Traefik
+  #
+  traefik:
+    image: traefik:v2.10.7
+    # the only service which ports have to be exposed outside
+    ports:
+      - target: 80
+        published: 80
+        mode: host
+      - target: 443
+        published: 443
+        mode: host
+      - target: 8080
+        published: 8080
+        mode: host
+      - target: {{ traefik_metrics_port }}
+        published: {{ traefik_metrics_port }}
+        mode: host
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /data/services/traefik/certs-traefik.yml:/configuration/conf.yml
+      - /data/services/traefik-certs/:/etc/ssl/traefik/
+    command:
+      - --api.insecure=true
+      - --log.level=DEBUG
+      - --providers.docker.exposedByDefault=false
+      - --providers.docker.swarmMode=true
+      - --entrypoints.web.address=:80
+      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+      - --entrypoints.websecure.address=:443
+      - --providers.file.filename=/configuration/conf.yml
+      - --providers.file.watch=true
+      - --accesslog=true
+      - --metrics.prometheus=true
+      - --metrics.prometheus.buckets=0.100000, 0.300000, 1.200000, 5.000000
+      - --metrics.prometheus.addEntryPointsLabels=true
+      - --metrics.prometheus.addServicesLabels=true
+      - --entryPoints.metrics.address=:{{ traefik_metrics_port }}
+      - --metrics.prometheus.entryPoint=metrics
+    deploy:
+      mode: replicated
+      replicas: 1
+      labels:
+        - "prometheus.job=1"
+        - "prometheus.port={{ traefik_metrics_port }}" 
+      placement:
+        constraints:
+          - node.role==manager
+    networks: 
+      default:
+        aliases:
+          - auth.vcc.local
+  
+
+  #
+  # Monitoring stack
+  #
+  # prom.vcc.local
+  prometheus:
+    # TODO
+    image: quay.io/prometheus/prometheus:v2.48.1
+    user: root # lol
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=14d
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro # to allow docker swarm service discovery inside prometheus config file
+      - /data/configs/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - /data/services/prometheus:/prometheus/data
+    deploy: # execute a single replica
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.role==manager
+      labels:
+        - "traefik.enable=true"
+        - "traefik.docker.network={{ docker_network_name }}"
+        - "traefik.http.routers.prometheus_route.rule=Host(`prom.vcc.local`)"
+        - "traefik.http.services.prometheus_service.loadbalancer.server.port={{ prometheus_service_port }}"
+        - "traefik.http.routers.prometheus_route.entrypoints=websecure"
+        - "traefik.http.routers.prometheus_route.tls=true"
+
+
+  fluent-bit:
+    image: cr.fluentbit.io/fluent/fluent-bit:2.2.0
+    user: root # needs to read /proc and /sys of the host
+    command:
+      - --config=/etc/fluent-bit/fluent-bit.yml
+    privileged: true
+    volumes:
+      - /data/configs/fluent-bit.conf:/etc/fluent-bit/fluent-bit.conf:ro
+      - /data/configs/fluent-bit.yml:/etc/fluent-bit/fluent-bit.yml:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /proc:/host/proc
+      - /sys:/host/sys
+    deploy: # TODO which mode?
+      mode: global # since it monitors the underlying machine, so one instance for each node is needed 
+      labels:
+        - "prometheus.job=1"
+        - "prometheus.port={{ fluent_bit_service_port }}" 
+
+
+  #
+  # Logging
+  #
+  loki:
+    # TODO
+    image: grafana/loki:2.9.1
+    volumes:
+      - /data/configs/loki.yml:/etc/loki/loki.yml
+      - /data/services/loki:/loki
+    user: root # otherwise loki can't create, for example, a needed folder
+    deploy: # TODO which mode?
+      mode: replicated
+      replicas: 1
+      labels:
+        - "prometheus.job=1"
+        - "prometheus.port={{ loki_service_port }}" 
+
+
+  promtail:
+    # TODO
+    image: grafana/promtail:2.9.1
+    command:
+      - -config.file=/etc/promtail/promtail.yml
+      - -config.expand-env=true
+    environment:
+      NODE_HOSTNAME: "{{'{{.Node.Hostname}}'}}" # escape the variable to tell jinja not to template anything inside the block
+    user: root # needs to access docker socket
+    volumes:
+      - /data/configs/promtail.yml:/etc/promtail/promtail.yml
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /var/lib/docker:/var/lib/docker
+      - /var/log:/var/log
+    deploy: # TODO which mode?
+      mode: global
+      labels:
+        - "prometheus.job=1"
+        - "prometheus.port={{ promtail_service_port }}" 
+    depends_on:
+      - loki
+
+  #
+  # Dashboarding
+  #
+  # mon.vcc.local
+  grafana:
+    # TODO
+    image: registry.vcc.local:5000/vcc-grafana
+    volumes:
+      - /data/services/traefik-certs/server.crt:/usr/local/share/ca-certificates/server.crt
+      - /data/services/grafana:/var/lib/grafana
+      - /data/configs/grafana:/etc/grafana/provisioning
+    user: root # lol
+    deploy: # execute a single replica
+      mode: replicated
+      replicas: 1
+      labels:
+        - 'traefik.enable=true'
+        - 'traefik.docker.network={{ docker_network_name }}'
+        - 'traefik.http.routers.grafana_route.entrypoints=websecure'
+        - 'traefik.http.routers.grafana_route.rule=Host(`mon.vcc.local`)'
+        - 'traefik.http.routers.grafana_route.tls=true'
+        - 'traefik.http.services.grafana_route.loadbalancer.server.port={{ grafana_service_port }}'
+        - "prometheus.job=1"
+        - "prometheus.port={{ grafana_service_port }}" 
+
+
+  #
+  # Database
+  #
+  database:
+    # TODO
+    image: postgres:16.1
+    hostname: db
+    environment:
+      POSTGRES_DB: "{{ POSTGRES_ADMIN_DB }}"
+      POSTGRES_USER: "{{ POSTGRES_ADMIN_USER }}"
+      POSTGRES_PASSWORD: "{{ POSTGRES_ADMIN_PASSWORD }}"
+    volumes:
+      - /data/configs/postgres:/docker-entrypoint-initdb.d
+      - /data/services/postgres:/var/lib/postgresql/data
+    deploy: # execute a single replica
+      mode: replicated
+      replicas: 1
+
+
+  #
+  # Application
+  #
+  forgejo:
+    # TODO
+    image: registry.vcc.local:5000/vcc-forgejo
+    environment:
+      - USER_UID=1000
+      - USER_GID=1000
+    volumes:
+      - /data/configs/forgejo.ini:/data/gitea/conf/app.ini
+      - /data/services/forgejo/gitea/data:/data/gitea/data
+      - /data/services/traefik-certs/server.crt:/usr/local/share/ca-certificates/server.crt
+    deploy: 
+      mode: replicated
+      replicas: 1
+      labels:
+        - "traefik.enable=true"
+        - "traefik.docker.network={{ docker_network_name }}"
+        - "traefik.http.routers.forgejo_route.rule=Host(`git.vcc.local`)"
+        - "traefik.http.services.forgejo_route.loadbalancer.server.port={{ forgejo_service_port }}"
+        - "traefik.http.routers.forgejo_route.entrypoints=websecure"
+        - "traefik.http.routers.forgejo_route.tls=true"
+        - "prometheus.job=1"
+        - "prometheus.port={{ forgejo_service_port }}" 
+    
+
+  #
+  # Authentication server
+  #
+  auth:
+    # TODO
+    image: quay.io/keycloak/keycloak:23.0.3
+    volumes:
+      - /data/configs/keycloak:/opt/keycloak/data/import
+    command:
+      - start-dev 
+      - --import-realm
+      # TODO specify the correct URL for authentication
+      - --transaction-xa-enabled=false 
+      - --proxy=edge 
+      - -Dkeycloak.frontendUrl=https://auth.vcc.local
+    environment:      
+      KC_DB: postgres
+      KC_DB_URL_HOST: database
+      KC_DB_URL_DATABASE: {{ POSTGRES_KEYCLOAK_DB }}
+      KC_DB_PASSWORD: {{ POSTGRES_KEYCLOAK_PASSWORD }}
+      KC_DB_USERNAME: {{ POSTGRES_KEYCLOAK_USER }}
+      KC_DB_SCHEMA: {{ POSTGRES_KEYCLOAK_SCHEMA }} 
+
+      KEYCLOAK_ADMIN: {{ KEYCLOAK_ADMIN }}
+      KEYCLOAK_ADMIN_PASSWORD: {{ KEYCLOAK_ADMIN_PASSWORD }}
+      
+      KC_METRICS_ENABLED: "true"
+    depends_on:
+      - database
+    logging:
+        driver: journald
+        options:
+            tag: keycloak_log
+    deploy: 
+      mode: replicated
+      replicas: 1
+        # if you capure something with auth.vcc.local in the request then forward it to this service on port 8080 
+      labels:
+        - 'traefik.enable=true'
+        - 'traefik.docker.network={{ docker_network_name }}'
+        - 'traefik.http.routers.auth_route.entrypoints=websecure'
+        - 'traefik.http.routers.auth_route.rule=Host(`auth.vcc.local`)'
+        - 'traefik.http.routers.auth_route.tls=true'
+        - 'traefik.http.services.auth_route.loadbalancer.server.port={{ keycloak_service_port }}'
+        - "prometheus.job=1"
+        - "prometheus.port={{ keycloak_service_port }}" 
+
+  auth_setup:
+   image: registry.vcc.local:5000/vcc-keycloak-users

@@ -1,0 +1,11 @@
+---
+# vars file for roles/docker
+
+# to format arch such that they work in commands that require architecture type
+format_arch:
+  x86_64: amd64
+  amd64: amd64
+  aarch64: arm64
+  arm64: arm64
+
+get_arch: "{{ format_arch[ansible_facts.architecture] }}"

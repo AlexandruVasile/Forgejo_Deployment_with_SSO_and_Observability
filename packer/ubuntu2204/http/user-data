@@ -1,0 +1,45 @@
+#cloud-config
+
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE
+# WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+# COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+# OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+# Ubuntu Server 22.04 LTS
+autoinstall:
+  version: 1
+  apt:
+    geoip: true
+    disable_components: []
+    preserve_sources_list: false
+    primary:
+      - arches: [amd64, i386]
+        uri: http://it.archive.ubuntu.com/ubuntu
+  early-commands:
+    - sudo systemctl stop ssh
+  locale: en_US
+  keyboard:
+    layout: us
+  identity:
+    hostname: vcc-ubuntu2204
+    username: vagrant
+    password: $6$sJqlSqMBCtljnew3$TdCcJeGeE1CA1spVKsNeOnQx5teymBGiiVRYxranAkUlXLveePQ0uaJX6QIN7a9idUBIhGQXH2unOOovxB.UY0
+  ssh:
+    install-server: true
+    allow-pw: true
+  packages:
+    - openssh-server
+    - open-vm-tools
+    - cloud-init
+    - whois
+    - net-tools
+    - wget
+    - tasksel
+  user-data:
+    disable_root: false
+    timezone: UTC
+  late-commands:
+    - sed -i -e 's/^#\?PasswordAuthentication.*/PasswordAuthentication yes/g' /target/etc/ssh/sshd_config
+    - echo 'vagrant ALL=(ALL) NOPASSWD:ALL' > /target/etc/sudoers.d/vagrant
+    - curtin in-target --target=/target -- chmod 440 /etc/sudoers.d/vagrant
+    - "lvresize -v -l +100%FREE /dev/mapper/ubuntu--vg-ubuntu--lv"
+    - "resize2fs -p /dev/mapper/ubuntu--vg-ubuntu--lv"
